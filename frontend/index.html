@@ -1,0 +1,18 @@
+
+<!DOCTYPE html>
+<html>
+<body>
+<h3>Control Mapper</h3>
+<input id="url" placeholder="Trust Center URL"/>
+<button onclick="run()">Analyze</button>
+<pre id="out"></pre>
+<script>
+async function run(){
+ const url=document.getElementById("url").value;
+ const r=await fetch("http://localhost:3000/analyze?url="+url);
+ const j=await r.json();
+ document.getElementById("out").innerText=JSON.stringify(j,null,2);
+}
+</script>
+</body>
+</html>

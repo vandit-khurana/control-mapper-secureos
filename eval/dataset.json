@@ -1,0 +1,5 @@
+
+[
+ {"a":"MFA for admin","b":"privileged MFA","label":"full"},
+ {"a":"encryption at rest","b":"encryption in storage and transit","label":"partial"}
+]
