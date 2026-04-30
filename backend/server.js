@@ -26,7 +26,7 @@ app.get("/analyze", async (req, res) => {
     const trustE = await embedControls(trustN);
     const baseE = await embedControls(base);
 
-    const mappings = mapControls([...socE, ...trustE], baseE);
+    const mappings = await mapControls([...socE, ...trustE], baseE);
 
     res.json({
       source_controls: [...soc, ...trust],
