@@ -8,7 +8,25 @@ This project builds a system to ingest, normalize, and map security/compliance c
 * Trust Center (web URL)
 * Common Control Master (Excel – normalized base)
 
-The system extracts controls from each source, semantically normalizes them, and maps them to a shared set of normalized common controls to identify overlap.
+The system extracts controls from each source, semantically normalizes them, and maps them to a shared set of normalized common controls to identify overlap and gaps.
+
+---
+
+## Key Problem
+
+Different organizations describe the same control in different ways.
+
+Example:
+
+* “Admins must use MFA”
+* “Privileged access requires multi-factor authentication”
+
+These represent the same intent but differ in wording and structure.
+
+The system solves this by:
+
+* Normalizing controls into canonical form
+* Mapping them using semantic similarity + reasoning
 
 ---
 
@@ -20,9 +38,14 @@ The system extracts controls from each source, semantically normalizes them, and
   * Web (Trust Center URL)
   * Excel (Common Control Master)
 
-* Normalize controls using LLM (semantic normalization)
+* Normalize controls using LLM (canonical representation)
 
-* Generate embeddings and compute similarity
+* Generate embeddings for semantic similarity
+
+* Hybrid mapping approach:
+
+  * Embedding-based retrieval (candidate selection)
+  * LLM-based reasoning (final decision)
 
 * Support:
 
@@ -32,12 +55,12 @@ The system extracts controls from each source, semantically normalizes them, and
 
 * Classify matches:
 
-  * **FULL** → strong semantic match
-  * **PARTIAL** → partial overlap
+  * **FULL** → control intent fully satisfied
+  * **PARTIAL** → control intent partially satisfied
 
-* Provide rationale for mappings
+* Provide human-readable rationale for each mapping
 
-* Simple UI to test and visualize output
+* Simple UI to visualize output
 
 ---
 
@@ -49,7 +72,7 @@ backend/
   services/
 frontend/
 eval/
-data/ (you add this)
+data/ (user provided)
 .env
 README.md
 ```
@@ -58,15 +81,9 @@ README.md
 
 ## Setup Instructions
 
-### 1. Clone / Extract Project
+### 1. Add Input Files
 
-Unzip the project and open in terminal or VS Code.
-
----
-
-### 2. Add Input Files
-
-Create a `data/` folder in root and add:
+Create a `data/` folder and add:
 
 ```
 data/
@@ -76,7 +93,7 @@ data/
 
 ---
 
-### 3. Add Environment Variable
+### 2. Environment Setup
 
 Create a `.env` file:
 
@@ -86,7 +103,7 @@ OPENAI_API_KEY=your_api_key_here
 
 ---
 
-### 4. Install Dependencies
+### 3. Install Dependencies
 
 ```
 npm init -y
@@ -95,13 +112,13 @@ npm install express cors mammoth xlsx cheerio axios openai dotenv
 
 ---
 
-### 5. Run Backend
+### 4. Run Backend
 
 ```
 node backend/server.js
 ```
 
-Server will run on:
+Server runs at:
 
 ```
 http://localhost:3000
@@ -109,7 +126,7 @@ http://localhost:3000
 
 ---
 
-### 6. Open UI
+### 5. Open UI
 
 Open in browser:
 
@@ -140,7 +157,7 @@ Enter a Trust Center URL and click **Analyze**.
       "source_control_ids": ["SC-1"],
       "normalized_common_control_ids": ["NCC-1"],
       "match_type": "full",
-      "rationale": "Semantic similarity between controls"
+      "rationale": "Covers both encryption at rest and in transit"
     }
   ]
 }
@@ -152,54 +169,96 @@ Enter a Trust Center URL and click **Analyze**.
 
 ### 1. Extraction
 
-* SOC 2: parsed using DOCX reader
-* Trust Center: scraped using HTML parser
-* Excel: loaded as normalized base controls
+* **SOC 2 Report**: Parsed using DOCX reader
+* **Trust Center**: Scraped via HTML parsing
+* **Excel**: Loaded as normalized base control library
+
+Control-like statements are filtered using keywords such as:
+
+* “must”
+* “required”
+* “are performed”
+* “is implemented”
 
 ---
 
-### 2. Normalization
+### 2. Normalization (LLM)
 
-Controls from SOC 2 and Trust Center are normalized using an LLM into canonical representations.
+Controls from SOC 2 and Trust Center are normalized using an LLM into canonical, atomic representations.
+
+Goals:
+
+* Remove organization-specific wording
+* Preserve intent
+* Standardize terminology
 
 Example:
 
 * "Admins must use MFA"
-* "Privileged access requires multi-factor authentication"
+* "Privileged access requires a second factor"
 
-→ normalized to same intent
-
----
-
-### 3. Embedding + Matching
-
-* Generate embeddings using OpenAI
-* Compute cosine similarity between:
-
-  * source controls
-  * base controls
+→ normalized to a consistent representation
 
 ---
 
-### 4. Mapping Logic
+### 3. Embedding + Retrieval
 
-Thresholds:
+Embeddings are generated using OpenAI for:
 
-* **FULL match** → similarity > 0.85
-* **PARTIAL match** → similarity > 0.6
-* **NONE** → below threshold
+* source controls
+* base controls
 
-Mappings support:
+Instead of comparing against all controls, the system:
 
-* one-to-one
-* one-to-many
-* many-to-one
+* retrieves **top-K most similar candidates** using cosine similarity
+
+This reduces computation and improves efficiency.
+
+---
+
+### 4. Mapping Logic (Hybrid Approach)
+
+The system uses a two-step hybrid approach:
+
+1. **Embedding-based retrieval**
+
+   * shortlist top candidate base controls
+
+2. **LLM-based reasoning**
+
+   * determine:
+
+     * match type (**full / partial / none**)
+     * rationale (1-line explanation)
+
+---
+
+### Why Hybrid?
+
+Semantic similarity alone is not sufficient.
+
+Example:
+
+* “encryption at rest”
+* “encryption at rest and in transit”
+
+These are highly similar but not equivalent.
+
+The LLM is used to:
+
+* distinguish full vs partial matches
+* provide explainability
 
 ---
 
 ### 5. Rationale
 
-Each mapping includes a short explanation indicating semantic similarity between controls.
+Each mapping includes a short explanation generated by the LLM.
+
+Examples:
+
+* “Covers encryption at rest but not in transit”
+* “Admin accounts map to privileged access with MFA”
 
 ---
 
@@ -213,46 +272,75 @@ Located in:
 eval/dataset.json
 ```
 
-Contains labeled pairs of controls with expected match types.
+Contains labeled control pairs with expected match types.
 
 ---
 
-### Eval Script
+### Eval Method
 
-Run:
+Evaluation runs the full pipeline:
 
-```
-node eval/eval.js
-```
+* embedding generation
+* candidate retrieval
+* LLM-based mapping
 
-Evaluates matching logic against labeled examples.
+Predicted results are compared with expected labels to compute accuracy.
+
+---
+
+### Note
+
+The dataset is small and intended for validation only.
+A larger labeled dataset would be required for production-grade evaluation.
+
+---
+
+## Design Decisions
+
+* **Hybrid Retrieval + Reasoning**
+
+  * Embeddings → candidate retrieval
+  * LLM → semantic reasoning
+
+* **LLM Usage Minimization**
+
+  * Used only for normalization and final decision-making
+
+* **Control Normalization**
+
+  * Improves embedding consistency and match quality
+
+* **Caching**
+
+  * Embeddings are cached to reduce API calls and latency
 
 ---
 
 ## Tradeoffs
 
-* LLM-based normalization improves semantic understanding but increases latency and cost
-* Embeddings provide flexible matching but require careful threshold tuning
-* Generic web scraping may not capture all controls accurately from every Trust Center
+* LLM usage improves accuracy but increases latency and cost
+* Embeddings are fast but cannot capture full semantic intent
+* Generic parsing may miss some controls depending on document structure
 
 ---
 
 ## Limitations
 
-* Limited evaluation dataset (small sample size)
-* Basic rationale generation (can be improved using LLM)
-* No caching → repeated API calls increase latency and cost
+* Limited evaluation dataset
+* No advanced control decomposition (many-to-many can be improved)
 * Domain grouping (e.g., CC1, CC6) not fully implemented
+* UI is minimal
 
 ---
 
 ## Future Improvements
 
-* Add caching layer for normalization and embeddings
-* Improve rationale using LLM-generated explanations
-* Implement domain-based grouping and filtering
-* Enhance UI with tables, filters, and match visualization
-* Expand evaluation dataset for better accuracy measurement
+* Add caching for normalization responses
+* Improve many-to-many mapping using control decomposition
+* Introduce domain classification (Access Control, Encryption, etc.)
+* Expand evaluation dataset
+* Use vector database (FAISS / Pinecone) for scalability
+* Improve UI with filtering and visualization
 
 ---
 
@@ -262,8 +350,19 @@ Evaluates matching logic against labeled examples.
 
   * any SOC 2 report
   * any Trust Center URL
-  * any updated control library
+  * any control library
 
-* For demo purposes, processing is limited to a subset of controls to reduce API usage
+* For demo purposes, smaller subsets may be used to reduce API usage
+
+---
+
+## Summary
+
+This system demonstrates a practical approach to solving semantic alignment problems in compliance systems using a combination of:
+
+* structured parsing
+* LLM-based normalization
+* embedding-based retrieval
+* LLM-based reasoning
 
 ---
