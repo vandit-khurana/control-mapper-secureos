@@ -1,18 +1,51 @@
-
 <!DOCTYPE html>
 <html>
 <body>
+
 <h3>Control Mapper</h3>
+
 <input id="url" placeholder="Trust Center URL"/>
 <button onclick="run()">Analyze</button>
-<pre id="out"></pre>
+
+<div id="out"></div>
+
 <script>
 async function run(){
- const url=document.getElementById("url").value;
- const r=await fetch("http://localhost:3000/analyze?url="+url);
- const j=await r.json();
- document.getElementById("out").innerText=JSON.stringify(j,null,2);
+  const url = document.getElementById("url").value;
+  const r = await fetch("http://localhost:3000/analyze?url=" + url);
+  const data = await r.json();
+
+  let html = "";
+
+  // Source Controls
+  html += "<h4><b>Source Controls</b></h4>";
+  data.source_controls.forEach(c => {
+    html += `<p>• <b>${c.control_id}</b>: ${c.raw_text}</p>`;
+  });
+
+  // Normalized Controls
+  html += "<h4><b>Normalized Common Controls</b></h4>";
+  data.normalized_common_controls.forEach(c => {
+    html += `<p>• <b>${c.control_id}</b>: ${c.text}</p>`;
+  });
+
+  // Mappings
+  html += "<h4><b>Example Mapping Output</b></h4>";
+  data.mappings.forEach(m => {
+    const sc = m.source_control_ids.join(", ");
+    const nc = m.normalized_common_control_ids.join(", ");
+
+    html += `
+      <p>
+        • <b>${sc}</b> -> <b>${nc}</b> - ${m.match_type}<br/>
+        &nbsp;&nbsp;&nbsp;&nbsp;Rationale: ${m.rationale}
+      </p>
+    `;
+  });
+
+  document.getElementById("out").innerHTML = html;
 }
 </script>
+
 </body>
 </html>

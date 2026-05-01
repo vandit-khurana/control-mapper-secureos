@@ -4,11 +4,11 @@
 
 This project builds a system to ingest, normalize, and map security/compliance controls across multiple sources:
 
-* SOC 2 Report (document)
-* Trust Center (web URL)
-* Common Control Master (Excel – normalized base)
+- SOC 2 Report (document)
+- Trust Center (web URL)
+- Common Control Master (Excel – normalized base)
 
-The system extracts controls from each source, semantically normalizes them, and maps them to a shared set of normalized common controls to identify overlap and gaps.
+The system extracts controls from each source, normalizes them into canonical form using LLMs, and maps them against a shared control library to identify overlap, partial coverage, and gaps.
 
 ---
 
@@ -18,49 +18,45 @@ Different organizations describe the same control in different ways.
 
 Example:
 
-* “Admins must use MFA”
-* “Privileged access requires multi-factor authentication”
+- “Admins must use MFA”
+- “Privileged access requires multi-factor authentication”
 
-These represent the same intent but differ in wording and structure.
+These represent the same intent but differ in structure and wording.
 
 The system solves this by:
 
-* Normalizing controls into canonical form
-* Mapping them using semantic similarity + reasoning
+- normalizing controls into canonical form
+- applying lightweight candidate filtering
+- using LLM reasoning for final semantic matching
 
 ---
 
 ## Features
 
-* Extract controls from:
+- Extract controls from:
+  - DOCX (SOC 2 report)
+  - Web (Trust Center URL)
+  - Excel (Common Control Master)
 
-  * DOCX (SOC 2 report)
-  * Web (Trust Center URL)
-  * Excel (Common Control Master)
+- Normalize controls using LLM:
+  - convert raw statements into canonical security intents
 
-* Normalize controls using LLM (canonical representation)
+- Hybrid mapping pipeline:
+  - keyword-based filtering
+  - lightweight scoring + ranking
+  - LLM-based validation
 
-* Generate embeddings for semantic similarity
+- Supports:
+  - 1:1 mappings
+  - 1:many mappings (limited, confidence-based)
+  - partial match detection
 
-* Hybrid mapping approach:
+- Output classification:
+  - FULL → complete intent match
+  - PARTIAL → partial overlap in intent
+  - NONE → no meaningful alignment
 
-  * Embedding-based retrieval (candidate selection)
-  * LLM-based reasoning (final decision)
-
-* Support:
-
-  * 1:1 mappings
-  * 1:many mappings
-  * many:1 mappings
-
-* Classify matches:
-
-  * **FULL** → control intent fully satisfied
-  * **PARTIAL** → control intent partially satisfied
-
-* Provide human-readable rationale for each mapping
-
-* Simple UI to visualize output
+- Explainability via LLM-generated rationale
 
 ---
 
@@ -72,7 +68,7 @@ backend/
   services/
 frontend/
 eval/
-data/ (user provided)
+data/
 .env
 README.md
 ```
@@ -81,9 +77,9 @@ README.md
 
 ## Setup Instructions
 
-### 1. Add Input Files
+### 1. Input Data
 
-Create a `data/` folder and add:
+Create `data/` folder:
 
 ```
 data/
@@ -94,8 +90,6 @@ data/
 ---
 
 ### 2. Environment Setup
-
-Create a `.env` file:
 
 ```
 OPENAI_API_KEY=your_api_key_here
@@ -128,13 +122,11 @@ http://localhost:3000
 
 ### 5. Open UI
 
-Open in browser:
-
 ```
 frontend/index.html
 ```
 
-Enter a Trust Center URL and click **Analyze**.
+Enter Trust Center URL → Click Analyze
 
 ---
 
@@ -147,17 +139,23 @@ Enter a Trust Center URL and click **Analyze**.
 ```json
 {
   "source_controls": [
-    { "control_id": "SC-1", "raw_text": "..." }
+    {
+      "control_id": "SC-1",
+      "raw_text": "Roles and responsibilities are documented"
+    }
   ],
   "normalized_common_controls": [
-    { "control_id": "NCC-1", "text": "..." }
+    {
+      "control_id": "NCC-1",
+      "text": "Defined security roles and responsibilities exist"
+    }
   ],
   "mappings": [
     {
       "source_control_ids": ["SC-1"],
       "normalized_common_control_ids": ["NCC-1"],
-      "match_type": "full",
-      "rationale": "Covers both encryption at rest and in transit"
+      "match_type": "partial",
+      "rationale": "Both define security accountability but differ in implementation depth"
     }
   ]
 }
@@ -167,202 +165,100 @@ Enter a Trust Center URL and click **Analyze**.
 
 ## Approach
 
-### 1. Extraction
+### 1. Extraction Layer
 
-* **SOC 2 Report**: Parsed using DOCX reader
-* **Trust Center**: Scraped via HTML parsing
-* **Excel**: Loaded as normalized base control library
-
-Control-like statements are filtered using keywords such as:
-
-* “must”
-* “required”
-* “are performed”
-* “is implemented”
+- SOC2: DOCX parsing
+- Trust Center: HTML scraping
+- Excel: structured control ingestion
 
 ---
 
-### 2. Normalization (LLM)
+### 2. Normalization Layer (LLM)
 
-Controls from SOC 2 and Trust Center are normalized using an LLM into canonical, atomic representations.
+Each extracted control is normalized into:
 
-Goals:
-
-* Remove organization-specific wording
-* Preserve intent
-* Standardize terminology
-
-Example:
-
-* "Admins must use MFA"
-* "Privileged access requires a second factor"
-
-→ normalized to a consistent representation
+- atomic security intent
+- vendor-neutral phrasing
+- standardized terminology
 
 ---
 
-### 3. Embedding + Retrieval
+### 3. Candidate Filtering Layer
 
-Embeddings are generated using OpenAI for:
-
-* source controls
-* base controls
-
-Instead of comparing against all controls, the system:
-
-* retrieves **top-K most similar candidates** using cosine similarity
-
-This reduces computation and improves efficiency.
+- keyword-based filtering reduces search space
+- lightweight scoring ranks candidates
+- top-K selected per control
 
 ---
 
-### 4. Mapping Logic (Hybrid Approach)
+### 4. Mapping Logic (Hybrid)
 
-The system uses a two-step hybrid approach:
-
-1. **Embedding-based retrieval**
-
-   * shortlist top candidate base controls
-
-2. **LLM-based reasoning**
-
-   * determine:
-
-     * match type (**full / partial / none**)
-     * rationale (1-line explanation)
+- pre-filtering
+- ranking
+- LLM validation
 
 ---
 
-### Why Hybrid?
+## Architecture Diagram
 
-Semantic similarity alone is not sufficient.
+```mermaid
+flowchart TD
 
-Example:
+A[Input Sources] --> B[Parsers Layer]
 
-* “encryption at rest”
-* “encryption at rest and in transit”
+B --> B1[DOCX Parser - SOC2]
+B --> B2[HTML Parser - Trust Center]
+B --> B3[Excel Parser]
 
-These are highly similar but not equivalent.
+B1 --> C[Raw Controls]
+B2 --> C
+B3 --> C
 
-The LLM is used to:
+C --> D[Normalization Layer - LLM]
+D --> E[Canonical Controls]
 
-* distinguish full vs partial matches
-* provide explainability
+E --> F[Candidate Filtering]
+F --> G[Top-K Selection]
 
----
+G --> H[LLM Matching Engine]
 
-### 5. Rationale
-
-Each mapping includes a short explanation generated by the LLM.
-
-Examples:
-
-* “Covers encryption at rest but not in transit”
-* “Admin accounts map to privileged access with MFA”
-
----
-
-## Evaluation
-
-### Dataset
-
-Located in:
-
+H --> I[Mappings Output]
+I --> J[Frontend]
 ```
-eval/dataset.json
-```
-
-Contains labeled control pairs with expected match types.
-
----
-
-### Eval Method
-
-Evaluation runs the full pipeline:
-
-* embedding generation
-* candidate retrieval
-* LLM-based mapping
-
-Predicted results are compared with expected labels to compute accuracy.
-
----
-
-### Note
-
-The dataset is small and intended for validation only.
-A larger labeled dataset would be required for production-grade evaluation.
-
----
-
-## Design Decisions
-
-* **Hybrid Retrieval + Reasoning**
-
-  * Embeddings → candidate retrieval
-  * LLM → semantic reasoning
-
-* **LLM Usage Minimization**
-
-  * Used only for normalization and final decision-making
-
-* **Control Normalization**
-
-  * Improves embedding consistency and match quality
-
-* **Caching**
-
-  * Embeddings are cached to reduce API calls and latency
 
 ---
 
 ## Tradeoffs
 
-* LLM usage improves accuracy but increases latency and cost
-* Embeddings are fast but cannot capture full semantic intent
-* Generic parsing may miss some controls depending on document structure
+- Better accuracy vs higher latency
+- LLM cost vs precision
+- Heuristic filtering may miss edge cases
 
 ---
 
 ## Limitations
 
-* Limited evaluation dataset
-* No advanced control decomposition (many-to-many can be improved)
-* Domain grouping (e.g., CC1, CC6) not fully implemented
-* UI is minimal
+- small eval dataset
+- no full graph-based many-to-many matching
+- domain classification not implemented
 
 ---
 
 ## Future Improvements
 
-* Add caching for normalization responses
-* Improve many-to-many mapping using control decomposition
-* Introduce domain classification (Access Control, Encryption, etc.)
-* Expand evaluation dataset
-* Use vector database (FAISS / Pinecone) for scalability
-* Improve UI with filtering and visualization
-
----
-
-## Notes
-
-* The system is designed to work with:
-
-  * any SOC 2 report
-  * any Trust Center URL
-  * any control library
-
-* For demo purposes, smaller subsets may be used to reduce API usage
+- vector DB (FAISS / Pinecone)
+- caching normalization layer
+- graph-based mapping engine
+- better evaluation dataset
+- UI visualization improvements
 
 ---
 
 ## Summary
 
-This system demonstrates a practical approach to solving semantic alignment problems in compliance systems using a combination of:
+A practical compliance mapping system combining:
 
-* structured parsing
-* LLM-based normalization
-* embedding-based retrieval
-* LLM-based reasoning
-
----
+- structured extraction
+- LLM normalization
+- lightweight retrieval filtering
+- LLM reasoning

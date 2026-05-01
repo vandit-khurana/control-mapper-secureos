@@ -1,80 +1,147 @@
 const OpenAI = require("openai");
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-function cosine(a, b) {
-  let d = 0,
-    ma = 0,
-    mb = 0;
-  for (let i = 0; i < a.length; i++) {
-    d += a[i] * b[i];
-    ma += a[i] * a[i];
-    mb += b[i] * b[i];
+const client = new OpenAI({
+  apiKey: process.env.OPENROUTER_API_KEY,
+  baseURL: "https://openrouter.ai/api/v1",
+});
+
+//  stronger keyword-based filtering
+function quickFilter(a, b) {
+  const aLower = a.toLowerCase();
+  const bLower = b.toLowerCase();
+
+  // intent buckets
+  const buckets = {
+    roles: ["roles", "responsibilities"],
+    policy: ["policy", "policies", "procedures"],
+    risk: ["risk", "assessment"],
+    access: ["access", "authentication", "authorization"],
+    encryption: ["encryption", "encrypt"],
+  };
+
+  for (const key in buckets) {
+    const words = buckets[key];
+
+    const aMatch = words.some((w) => aLower.includes(w));
+    const bMatch = words.some((w) => bLower.includes(w));
+
+    if (aMatch && bMatch) return true;
   }
-  return d / (Math.sqrt(ma) * Math.sqrt(mb));
+
+  return false;
 }
 
-// shortlist top K candidates
-function getTopCandidates(source, base, k = 3) {
-  const scored = base.map((b) => ({
-    ...b,
-    score: cosine(source.vector, b.vector),
-  }));
+//  ranking score
+function quickScore(a, b) {
+  const wordsA = a.toLowerCase().split(/\W+/);
+  const wordsB = b.toLowerCase().split(/\W+/);
 
-  return scored.sort((a, b) => b.score - a.score).slice(0, k);
+  return wordsA.filter((w) => wordsB.includes(w)).length;
 }
 
-async function decideMatch(source, candidates) {
-  const prompt = `
-Source control:
-${source.normalized || source.raw_text}
-
-Candidate controls:
-${candidates.map((c, i) => `${i + 1}. ${c.text}`).join("\n")}
-
-For each candidate, return JSON:
-[
-  {
-    "id": "<control_id>",
-    "match_type": "full | partial | none",
-    "rationale": "<one line reason>"
-  }
-]
-`;
-
-  const r = await client.chat.completions.create({
-    model: "gpt-4.1-mini",
-    messages: [{ role: "user", content: prompt }],
-    temperature: 0,
-  });
-
+//  safe JSON parse
+function safeParse(content) {
   try {
-    return JSON.parse(r.choices[0].message.content);
+    const match = content.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    return JSON.parse(match[0]);
   } catch {
-    return [];
+    return null;
   }
 }
 
 async function mapControls(source, base) {
-  let results = [];
+  const results = [];
 
-  for (const s of source) {
-    const candidates = getTopCandidates(s, base);
+  await Promise.all(
+    source.map(async (s) => {
+      const sourceText = s.normalized || s.raw_text;
 
-    const decisions = await decideMatch(s, candidates);
+      //  Step 1: filter
+      let candidates = base.filter((b) => quickFilter(sourceText, b.text));
 
-    const valid = decisions.filter((d) => d.match_type !== "none");
+      // fallback if nothing matched
+      if (candidates.length === 0) {
+        candidates = base;
+      }
 
-    if (valid.length) {
-      results.push({
-        source_control_ids: [s.control_id],
-        normalized_common_control_ids: valid.map((v) => v.id),
-        match_type: valid.some((v) => v.match_type === "full")
-          ? "full"
-          : "partial",
-        rationale: valid.map((v) => v.rationale).join(" | "),
+      //  Step 2: rank + top-K
+      candidates = candidates
+        .map((b) => ({
+          ...b,
+          score: quickScore(sourceText, b.text),
+        }))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 7);
+
+      //  Step 3: LLM evaluation (parallel)
+      const tasks = candidates.map(async (b) => {
+        const prompt = `
+Compare the following controls:
+
+Source: ${sourceText}
+Base: ${b.text}
+
+Classify as:
+- full → if both controls represent the same core requirement, even if phrased differently or one focuses on documentation and the other on enforcement
+- partial → if there is strong overlap in intent but not complete coverage
+- none → if controls are unrelated
+
+Be strict. Do not force a match.
+
+Respond ONLY in JSON:
+{
+  "match_type": "full | partial | none",
+  "rationale": "..."
+}
+`;
+
+        try {
+          const r = await client.chat.completions.create({
+            model: "openai/gpt-4o-mini",
+            messages: [{ role: "user", content: prompt }],
+            temperature: 0,
+          });
+
+          const parsed = safeParse(r.choices[0].message.content);
+          if (!parsed) return null;
+
+          if (parsed.match_type && parsed.match_type !== "none") {
+            return {
+              id: b.control_id,
+              type: parsed.match_type,
+              rationale: parsed.rationale,
+            };
+          }
+        } catch (err) {
+          console.log("LLM error:", err.message);
+        }
+
+        return null;
       });
-    }
-  }
+
+      const matched = (await Promise.all(tasks)).filter(Boolean);
+
+      //  Step 4: precision-first selection
+      if (matched.length) {
+        const fullMatches = matched.filter((m) => m.type === "full");
+
+        const finalMatches =
+          fullMatches.length > 0
+            ? fullMatches
+            : matched.filter((m) => m.type === "partial").slice(0, 2);
+
+        results.push({
+          source_control_ids: [s.control_id],
+          normalized_common_control_ids: finalMatches.map((m) => m.id),
+          match_type: finalMatches.some((m) => m.type === "full")
+            ? "full"
+            : "partial",
+          rationale: finalMatches.map((m) => m.rationale).join(" | "),
+        });
+      }
+    }),
+  );
 
   return results;
 }

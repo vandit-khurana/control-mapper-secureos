@@ -1,19 +1,20 @@
-const OpenAI = require("openai");
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+let extractor = null;
 
-const cache = new Map();
+async function loadModel() {
+  if (!extractor) {
+    process.env.TRANSFORMERS_BACKEND = "wasm";
+    const { pipeline } = await import("@xenova/transformers");
+    extractor = await pipeline("feature-extraction", "Xenova/all-MiniLM-L6-v2");
+  }
+}
 
-async function emb(t) {
-  if (cache.has(t)) return cache.get(t);
-
-  const r = await client.embeddings.create({
-    model: "text-embedding-3-small",
-    input: t,
+async function emb(text) {
+  await loadModel();
+  const output = await extractor(text, {
+    pooling: "mean",
+    normalize: true,
   });
-
-  const vec = r.data[0].embedding;
-  cache.set(t, vec);
-  return vec;
+  return Array.from(output.data);
 }
 
 async function embedControls(arr) {
